@@ -1,7 +1,7 @@
 ﻿using UnityEngine;
 using UnityEngine.UI;
-using System.Collections.Generic;
 using TMPro;
+using System.Collections.Generic;
 
 [System.Serializable]
 public class ECGPhase
@@ -29,14 +29,15 @@ public class HeartSimulationController : MonoBehaviour
     public HeartAnimationController heartAnimationController;
     public ECGGraph ecgGraph;
     public Slider speedSlider;
-    public TMP_Text speed;        // Label above slider
-    public TMP_Text bpmDisplay;   // ✅ TextMeshPro to show BPM
+    public TMP_Text speed;
+    public TMP_Text bpmDisplay;
+    public TMP_Text phaseDisplay; // ✅ Show current ECG phase
     public TextAsset phasesJsonFile;
     public TextAsset plotJsonFile;
-    public VirtualECGGraph virtualEcgGraph; // Assign in Inspector
+    public VirtualECGGraph virtualEcgGraph;
+    public HemodynamicsController hemodynamicsController;
 
-
-    // === Simulation state ===
+    // === Internal state ===
     private ECGData ecgData;
     private float[] ecgSignal;
     private float simulationTime = 0f;
@@ -44,16 +45,14 @@ public class HeartSimulationController : MonoBehaviour
     private int currentPhaseIndex = 0;
     private float totalDataDuration;
 
-    // === BPM tracking ===
     private float realBPM = 0f;
-    private float runtimeStart;
     private int virtualQRSCount = 0;
     private float firstQRS = -1f;
     private float lastQRS = -1f;
 
     void Start()
     {
-        // Load JSON
+        // === Load JSON Data ===
         string phasesJson = "{\"phases\":" + phasesJsonFile.text + "}";
         ecgData = JsonUtility.FromJson<ECGData>(phasesJson);
 
@@ -61,27 +60,19 @@ public class HeartSimulationController : MonoBehaviour
         ECGPlotData ecgPlotData = JsonUtility.FromJson<ECGPlotData>(plotJson);
         ecgSignal = ecgPlotData.plotValues.ToArray();
 
-        // Setup speed
+        if (ecgData.phases.Count > 0)
+            totalDataDuration = (float)ecgData.phases[ecgData.phases.Count - 1].entry;
+
+        ecgGraph.Initialize(ecgSignal);
+
+        // === Speed Slider Setup ===
         if (speedSlider != null)
         {
             speedSlider.onValueChanged.AddListener(OnSpeedChanged);
             OnSpeedChanged(speedSlider.value);
         }
-        else
-        {
-            timeScale = 1f;
-        }
 
-        // Estimate total duration of ECG
-        if (ecgData.phases.Count > 0)
-        {
-            totalDataDuration = (float)ecgData.phases[ecgData.phases.Count - 1].entry;
-        }
-
-        ecgGraph.Initialize(ecgSignal);
-        runtimeStart = Time.time;
-
-        // ✅ Calculate real BPM now
+        // === Real BPM Calculation ===
         int realQRSCount = 0;
         foreach (var phase in ecgData.phases)
         {
@@ -95,51 +86,81 @@ public class HeartSimulationController : MonoBehaviour
         }
 
         if (realQRSCount > 1)
-        {
             realBPM = 60f * (realQRSCount - 1) / (lastQRS - firstQRS);
-        }
     }
 
     void Update()
     {
         simulationTime += Time.deltaTime * timeScale;
 
-        // Loop
+        // Loop back to start if end is reached
         if (simulationTime > totalDataDuration)
         {
             simulationTime = 0;
             currentPhaseIndex = 0;
             virtualQRSCount = 0;
-            runtimeStart = Time.time;
         }
 
         ecgGraph.UpdateGraph(simulationTime);
+        UpdateCurrentPhaseDisplay(); // ✅ Update UI
 
+        // === Trigger Next ECG Phase ===
         if (currentPhaseIndex < ecgData.phases.Count)
         {
             ECGPhase nextPhase = ecgData.phases[currentPhaseIndex];
             if (simulationTime >= nextPhase.entry)
             {
-                UnityEngine.Debug.Log($"Starting Phase: {nextPhase.phase} at {simulationTime:F2}s");
+                UnityEngine.Debug.Log($"🫀 Triggering: {nextPhase.phase} @ {simulationTime:F2}s");
 
-                if (heartAnimationController != null)
-                {
-                    heartAnimationController.PlayPhase(nextPhase.phase, (float)nextPhase.duration, timeScale);
-                }
+                // Trigger Heart Animation
+                heartAnimationController?.PlayPhase(nextPhase.phase, (float)nextPhase.duration, timeScale);
 
+                // Trigger Virtual ECG
                 if (nextPhase.phase == "QRS")
                 {
                     virtualQRSCount++;
-                    if (virtualEcgGraph != null)
-                        virtualEcgGraph.InjectQRSComplex();                    // ✅ Inject QRS into the virtual graph
+                    virtualEcgGraph?.InjectQRSComplex();
                 }
 
+                // Trigger Blood Flow
+                if (hemodynamicsController != null)
+                {
+                    switch (nextPhase.phase)
+                    {
+                        case "PQ":
+                            hemodynamicsController.TriggerAtrialContraction();
+                            break;
+                        case "QRS":
+                            hemodynamicsController.TriggerVentricularEjection();
+                            break;
+                    }
+                }
 
                 currentPhaseIndex++;
             }
         }
 
         UpdateBPMDisplay();
+    }
+
+    void UpdateCurrentPhaseDisplay()
+    {
+        if (phaseDisplay == null) return;
+
+        string currentPhase = "Idle";
+
+        foreach (var phase in ecgData.phases)
+        {
+            float entry = (float)phase.entry;
+            float exit = entry + (float)phase.duration;
+            if (simulationTime >= entry && simulationTime < exit)
+            {
+                currentPhase = phase.phase;
+                break;
+            }
+        }
+
+        phaseDisplay.text = $"Current Phase: {currentPhase}";
     }
 
     void UpdateBPMDisplay()
@@ -151,13 +172,10 @@ public class HeartSimulationController : MonoBehaviour
         }
     }
 
-
     public void OnSpeedChanged(float value)
     {
         timeScale = value;
-        if (speed != null)
-        {
-            speed.text = $"Speed: {value*2:F1}x";
-        }
+        virtualEcgGraph?.SetTimeScale(timeScale);
+        speed.text = $"Speed: {value * 2:F1}x";
     }
 }

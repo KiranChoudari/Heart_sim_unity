@@ -8,10 +8,15 @@ import numpy as np
 import json
 import heartpy as hp
 from scipy import signal as sp_signal
+import os
 
 # === Read patient record number from command line ===
 record_num = int(sys.argv[1])
-record_path = f"./mit-bih-arrhythmia-database-1.0.0/{record_num}"
+
+# === Paths ===
+base_data_path = r"C:/Users/Kiran/Desktop/PESticide/HEADACHE/CAVE Labs/project/unity/Heart_Simulation/Assets/Data"
+dataset_path = os.path.join(base_data_path, "mit-bih-arrhythmia-database-1.0.0/mit-bih-arrhythmia-database-1.0.0")
+record_path = os.path.join(dataset_path, str(record_num))
 
 # === Load ECG ===
 record = wfdb.rdrecord(record_path)
@@ -74,14 +79,21 @@ def detect_pqrst_points(filtered_ecg, r_peaks, fs):
 
 info = detect_pqrst_points(filtered_ecg, r_peaks, fs)
 
+# === Create output directory if not exists ===
+os.makedirs(base_data_path, exist_ok=True)
+
 # === Save Plot JSON ===
-ecg_segment = filtered_ecg[:fs*60]  # First 60 seconds
-with open(f'ecg_plot{record_num}.json', 'w') as f:
+ecg_segment = filtered_ecg[:fs*60]  # First 60 seconds only
+plot_path = os.path.join(base_data_path, f'ecg_plot{record_num}.json')
+with open(plot_path, 'w') as f:
     json.dump(ecg_segment.tolist(), f)
 
 # === Save PQRST intervals ===
 pqrst_intervals = []
-peaks = {wave: [idx / fs for idx in info.get(f'ECG_{wave}_Peaks', []) if idx is not None] for wave in ['P', 'Q', 'R', 'S', 'T']}
+peaks = {
+    wave: [idx / fs for idx in info.get(f'ECG_{wave}_Peaks', []) if idx is not None]
+    for wave in ['P', 'Q', 'R', 'S', 'T']
+}
 for i in range(min(len(peaks['P']), len(peaks['Q']), len(peaks['S']), len(peaks['T']))):
     try:
         pqrst_intervals.append({"entry": peaks['P'][i], "duration": peaks['Q'][i] - peaks['P'][i], "phase": "PQ"})
@@ -90,7 +102,8 @@ for i in range(min(len(peaks['P']), len(peaks['Q']), len(peaks['S']), len(peaks[
     except:
         continue
 
-with open(f'ecg_phases{record_num}.json', 'w') as f:
+phases_path = os.path.join(base_data_path, f'ecg_phases{record_num}.json')
+with open(phases_path, 'w') as f:
     json.dump(pqrst_intervals, f, indent=2)
 
-print(f"✅ Generated ecg_plot{record_num}.json and ecg_phases{record_num}.json")
+print(f"✅ Generated:\n - {plot_path}\n - {phases_path}")

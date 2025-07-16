@@ -13,13 +13,12 @@ public class VirtualECGGraph : MonoBehaviour
     public Vector3 graphStartPosition = new Vector3(7f, 17f, -0.01f);
 
     private List<float> signalBuffer = new List<float>();
-    private float[] pWave;
-    private float[] qDip;
-    private float[] rSpike;
-    private float[] sDip;
-    private float[] tWave;
+    private Queue<float> waveformInjectionQueue = new Queue<float>();
 
-    private float sampleRate = 360f; // 360 samples per second (MIT-BIH standard)
+    private float[] pWave, qDip, rSpike, sDip, tWave;
+    private float sampleRate = 360f;
+    private float simulationTime = 0f;
+    private float timeScale = 1f;
 
     void Awake()
     {
@@ -31,53 +30,71 @@ public class VirtualECGGraph : MonoBehaviour
         for (int i = 0; i < pointsOnScreen; i++)
             signalBuffer.Add(0f);
 
-        pWave = GenerateSpike(30, 0.3f);   // subtle spike
-        qDip = GenerateDip(10, 0.2f);      // shallow dip
-        rSpike = GenerateSpike(20, 1.0f);  // main spike
-        sDip = GenerateDip(10, 0.3f);      // shallow dip
-        tWave = GenerateSpike(40, 0.5f);   // broad mild spike
+        // Generate synthetic waveform components
+        pWave = GenerateSpike(30, 0.3f);   // subtle P-wave
+        qDip = GenerateDip(10, 0.2f);     // Q-dip
+        rSpike = GenerateSpike(20, 1.0f);  // main R-peak
+        sDip = GenerateDip(10, 0.3f);     // S-dip
+        tWave = GenerateSpike(40, 0.5f);   // broad T-wave
     }
 
     void Update()
     {
+        simulationTime += Time.deltaTime * timeScale;
+        float samplesToAdd = simulationTime * sampleRate;
+        int intSamples = Mathf.FloorToInt(samplesToAdd);
+        simulationTime -= intSamples / sampleRate;
+
+        for (int i = 0; i < intSamples; i++)
+        {
+            float nextSample = waveformInjectionQueue.Count > 0 ? waveformInjectionQueue.Dequeue() : 0f;
+
+            // Add noise for realism
+            float noise = UnityEngine.Random.Range(-0.015f, 0.015f);             // random jitter
+            float baseline = 0.03f * Mathf.Sin(2f * Mathf.PI * Time.time * 0.5f); // slow drift
+
+            signalBuffer.Add(nextSample + noise + baseline);
+
+            if (signalBuffer.Count > pointsOnScreen)
+                signalBuffer.RemoveAt(0);
+        }
+
         UpdateGraph();
     }
 
     public void InjectQRSComplex()
     {
-        int delayBeforeQ = Mathf.RoundToInt(sampleRate * 0.200f); // P-wave start
-        int delayBeforeR = Mathf.RoundToInt(sampleRate * 0.010f); // Q-dip before R
-        int delayAfterR = Mathf.RoundToInt(sampleRate * 0.010f);  // S-dip after R
-        int delayAfterS = Mathf.RoundToInt(sampleRate * 0.010f);  // T-wave after S
+        int delayBeforeQ = Mathf.RoundToInt(sampleRate * 0.200f);
+        int delayBeforeR = Mathf.RoundToInt(sampleRate * 0.010f);
+        int delayAfterR = Mathf.RoundToInt(sampleRate * 0.010f);
+        int delayAfterS = Mathf.RoundToInt(sampleRate * 0.010f);
 
-        InsertBlank(delayBeforeQ);
-        InsertWave(pWave);
-        InsertBlank(delayBeforeR - pWave.Length);
-        InsertWave(qDip);
-        InsertWave(rSpike);
-        InsertWave(sDip);
-        InsertBlank(delayAfterS);
-        InsertWave(tWave);
+        EnqueueBlank(delayBeforeQ);
+        EnqueueWave(pWave);
+        EnqueueBlank(delayBeforeR - pWave.Length);
+        EnqueueWave(qDip);
+        EnqueueWave(rSpike);
+        EnqueueWave(sDip);
+        EnqueueBlank(delayAfterS);
+        EnqueueWave(tWave);
     }
 
-    void InsertBlank(int count)
+    void EnqueueBlank(int count)
     {
         for (int i = 0; i < count; i++)
-            signalBuffer.Add(0f);
+            waveformInjectionQueue.Enqueue(0f);
     }
 
-    void InsertWave(float[] wave)
+    void EnqueueWave(float[] wave)
     {
         foreach (var point in wave)
-            signalBuffer.Add(point);
+        {
+            waveformInjectionQueue.Enqueue(point);
+        }
     }
 
     void UpdateGraph()
     {
-        signalBuffer.Add(0f); // continuous scroll
-        if (signalBuffer.Count > pointsOnScreen)
-            signalBuffer.RemoveAt(0);
-
         Vector3[] positions = new Vector3[pointsOnScreen];
         for (int i = 0; i < pointsOnScreen; i++)
         {
@@ -85,7 +102,6 @@ public class VirtualECGGraph : MonoBehaviour
             float y = signalBuffer[i] * amplitude;
             positions[i] = graphStartPosition + new Vector3(x, y, 0);
         }
-
         lineRenderer.SetPositions(positions);
     }
 
@@ -109,5 +125,13 @@ public class VirtualECGGraph : MonoBehaviour
             waveform[i] = -depth * Mathf.Exp(-60f * Mathf.Pow(t - 0.5f, 2));
         }
         return waveform;
+    }
+
+    /// <summary>
+    /// Call this from external controller to sync simulation speed.
+    /// </summary>
+    public void SetTimeScale(float scale)
+    {
+        timeScale = scale;
     }
 }
