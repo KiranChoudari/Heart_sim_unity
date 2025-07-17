@@ -2,6 +2,7 @@
 using UnityEngine.UI;
 using TMPro;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 [System.Serializable]
 public class ECGPhase
@@ -25,19 +26,22 @@ public class ECGPlotData
 
 public class HeartSimulationController : MonoBehaviour
 {
-    // === Assign in Inspector ===
+    [Header("References")]
     public HeartAnimationController heartAnimationController;
     public ECGGraph ecgGraph;
-    public Slider speedSlider;
-    public TMP_Text speed;
-    public TMP_Text bpmDisplay;
-    public TMP_Text phaseDisplay; // ✅ Show current ECG phase
-    public TextAsset phasesJsonFile;
-    public TextAsset plotJsonFile;
     public VirtualECGGraph virtualEcgGraph;
     public HemodynamicsController hemodynamicsController;
 
-    // === Internal state ===
+    [Header("UI")]
+    public Slider speedSlider;
+    public TMP_Text speed;
+    public TMP_Text bpmDisplay;
+    public TMP_Text phaseDisplay;
+
+    [Header("Default JSON Assets")]
+    public TextAsset phasesJsonFile;
+    public TextAsset plotJsonFile;
+
     private ECGData ecgData;
     private float[] ecgSignal;
     private float simulationTime = 0f;
@@ -52,7 +56,8 @@ public class HeartSimulationController : MonoBehaviour
 
     void Start()
     {
-        // === Load JSON Data ===
+        // Always load default JSON on start; user uploads handled later
+        UnityEngine.Debug.Log("📦 Loading default JSON...");
         string phasesJson = "{\"phases\":" + phasesJsonFile.text + "}";
         ecgData = JsonUtility.FromJson<ECGData>(phasesJson);
 
@@ -60,40 +65,48 @@ public class HeartSimulationController : MonoBehaviour
         ECGPlotData ecgPlotData = JsonUtility.FromJson<ECGPlotData>(plotJson);
         ecgSignal = ecgPlotData.plotValues.ToArray();
 
+        InitSimulation();
+    }
+
+    void InitSimulation()
+    {
+        simulationTime = 0f;
+        currentPhaseIndex = 0;
+        virtualQRSCount = 0;
+        firstQRS = -1f;
+        lastQRS = -1f;
+
         if (ecgData.phases.Count > 0)
             totalDataDuration = (float)ecgData.phases[ecgData.phases.Count - 1].entry;
 
         ecgGraph.Initialize(ecgSignal);
 
-        // === Speed Slider Setup ===
-        if (speedSlider != null)
-        {
-            speedSlider.onValueChanged.AddListener(OnSpeedChanged);
-            OnSpeedChanged(speedSlider.value);
-        }
-
-        // === Real BPM Calculation ===
         int realQRSCount = 0;
         foreach (var phase in ecgData.phases)
         {
             if (phase.phase == "QRS")
             {
                 realQRSCount++;
-                float entryTime = (float)phase.entry;
-                if (firstQRS < 0) firstQRS = entryTime;
-                lastQRS = entryTime;
+                float entry = (float)phase.entry;
+                if (firstQRS < 0) firstQRS = entry;
+                lastQRS = entry;
             }
         }
 
         if (realQRSCount > 1)
             realBPM = 60f * (realQRSCount - 1) / (lastQRS - firstQRS);
+
+        if (speedSlider != null)
+        {
+            speedSlider.onValueChanged.AddListener(OnSpeedChanged);
+            OnSpeedChanged(speedSlider.value);
+        }
     }
 
     void Update()
     {
         simulationTime += Time.deltaTime * timeScale;
 
-        // Loop back to start if end is reached
         if (simulationTime > totalDataDuration)
         {
             simulationTime = 0;
@@ -102,30 +115,26 @@ public class HeartSimulationController : MonoBehaviour
         }
 
         ecgGraph.UpdateGraph(simulationTime);
-        UpdateCurrentPhaseDisplay(); // ✅ Update UI
+        UpdateCurrentPhaseDisplay();
 
-        // === Trigger Next ECG Phase ===
         if (currentPhaseIndex < ecgData.phases.Count)
         {
-            ECGPhase nextPhase = ecgData.phases[currentPhaseIndex];
-            if (simulationTime >= nextPhase.entry)
+            ECGPhase next = ecgData.phases[currentPhaseIndex];
+            if (simulationTime >= next.entry)
             {
-                UnityEngine.Debug.Log($"🫀 Triggering: {nextPhase.phase} @ {simulationTime:F2}s");
+                UnityEngine.Debug.Log($"🫀 Triggering {next.phase} @ {simulationTime:F2}s");
 
-                // Trigger Heart Animation
-                heartAnimationController?.PlayPhase(nextPhase.phase, (float)nextPhase.duration, timeScale);
+                heartAnimationController?.PlayPhase(next.phase, (float)next.duration, timeScale);
 
-                // Trigger Virtual ECG
-                if (nextPhase.phase == "QRS")
+                if (next.phase == "QRS")
                 {
                     virtualQRSCount++;
                     virtualEcgGraph?.InjectQRSComplex();
                 }
 
-                // Trigger Blood Flow
                 if (hemodynamicsController != null)
                 {
-                    switch (nextPhase.phase)
+                    switch (next.phase)
                     {
                         case "PQ":
                             hemodynamicsController.TriggerAtrialContraction();
@@ -147,20 +156,20 @@ public class HeartSimulationController : MonoBehaviour
     {
         if (phaseDisplay == null) return;
 
-        string currentPhase = "Idle";
+        string current = "Idle";
 
-        foreach (var phase in ecgData.phases)
+        foreach (var p in ecgData.phases)
         {
-            float entry = (float)phase.entry;
-            float exit = entry + (float)phase.duration;
-            if (simulationTime >= entry && simulationTime < exit)
+            float start = (float)p.entry;
+            float end = start + (float)p.duration;
+            if (simulationTime >= start && simulationTime < end)
             {
-                currentPhase = phase.phase;
+                current = p.phase;
                 break;
             }
         }
 
-        phaseDisplay.text = $"Current Phase: {currentPhase}";
+        phaseDisplay.text = $"Current Phase: {current}";
     }
 
     void UpdateBPMDisplay()
@@ -172,10 +181,21 @@ public class HeartSimulationController : MonoBehaviour
         }
     }
 
-    public void OnSpeedChanged(float value)
+    public void OnSpeedChanged(float val)
     {
-        timeScale = value;
+        timeScale = val;
         virtualEcgGraph?.SetTimeScale(timeScale);
-        speed.text = $"Speed: {value * 2:F1}x";
+        if (speed != null)
+            speed.text = $"Speed: {val * 2:F1}x";
+    }
+
+    // Called by WebGLJSONLoader.cs when user uploads JSON
+    public void LoadFromText(string plotJson, string phasesJson)
+    {
+        ecgData = JsonUtility.FromJson<ECGData>("{\"phases\":" + phasesJson + "}");
+        ECGPlotData plot = JsonUtility.FromJson<ECGPlotData>("{\"plotValues\":" + plotJson + "}");
+        ecgSignal = plot.plotValues.ToArray();
+
+        InitSimulation();
     }
 }
