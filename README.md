@@ -98,6 +98,9 @@ See Phase	Text label indicating current ECG phase
 ## 📸 Screenshots
 <img width="1905" height="1055" alt="image" src="https://github.com/user-attachments/assets/4d829d54-4ac5-4d91-bd9a-ab92bbdab2d9" />
 
+## 👨‍💻 Credits
+
+Designed & built by Kiran and Kalmesh Bharamappa Teli
 
 ## 🌐 Live Demo
 🔗 Deployed WebGL Build on Netlify
